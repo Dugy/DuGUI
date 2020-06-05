@@ -5,16 +5,16 @@ using namespace DuGUI;
 
 struct NameWindow : DuGUI::VBox {
 	Title t = title("Set address");
-//	struct : HBox {
+	struct : HBox {
 		Input<std::string> first = defaultText("First name");
 		Input<std::string> last = defaultText("Last name");
-//	} name = { noBorder() };
+	} name = { noBorder() };
 	Input<std::string> address = defaultText("Address");
-//	struct : HBox {
+	struct : HBox {
 		Input<std::string> city = defaultText("City");
 		Input<int> code = defaultText("Postal code");
-//	} city = { noBorder() };
-//	Button submit = title("Submit");
+	} city = { noBorder() };
+	Button submit = title("Submit");
 };
 
 #include <QApplication>
@@ -25,8 +25,9 @@ int main(int argc, char *argv[])
 //	MainWindow w;
 //	w.show();
 
-	DuGUI::BackendQt();
-
+	DuGUI::BackendQt backend;
+	NameWindow window;
+	window.run(backend);
 
 	return a.exec();
 }

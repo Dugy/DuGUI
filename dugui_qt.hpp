@@ -2,23 +2,53 @@
 #define DUGUI_QT_WIDGETS
 #include "dugui.hpp"
 
+class QPushButton;
+class QCheckBox;
+class QLineEdit;
+class QSlider;
+class QSpinBox;
+class QWidget;
+class QBoxLayout;
+class QGridLayout;
+class QLabel;
+
 namespace DuGUI {
 
-struct BackendQt : public Backend {
-	void setType(WidgetType type) override;
+class BackendQtWindow;
+
+struct BackendQt final : public Backend {
+	WidgetType _type;
+	union {
+		QWidget* dummy = nullptr;
+		QPushButton* button;
+		QCheckBox* checkBox;
+		QLineEdit* lineEdit;
+		QSlider* slider;
+		QSpinBox* spinBox;
+	} _widget;
+
+	union {
+		QWidget* dummy = nullptr;
+		BackendQtWindow* window;
+		QWidget* nonWindow;
+	} _container;
+
+	union {
+		void* dummy = nullptr;
+		QLabel* description;
+		std::vector<std::shared_ptr<BackendQt>>* children;
+	} _auxiliary;
+
+	void create(const std::shared_ptr<StartupProperties>& properties) override;
 	void setTitle(const std::string& title) override;
 	void addValueChangedReacion(const std::function<void(const std::string&)>& reaction) override;
 	void addValueChangedReacion(const std::function<void(long long int)>& reaction) override;
 	void addValueChangedReacion(const std::function<void(double)>& reaction) override;
+	void addReaction(const std::function<void()>& reaction) override;
 	void setValue(const std::string& value) override;
 	void setValue(long long int value) override;
 	void setValue(double value) override;
-	void setBorder(bool border) override;
-	void setDefaultText(const std::string& defaultText) override;
-	void addElement(const std::shared_ptr<Backend>& element) override;
-	void addElement(Backend* element) override;
-	void setIfWindow(bool window) override;
-	void create() override;
+	std::shared_ptr<Backend> createAnotherElement() override;
 };
 
 } // namespace DuGUI

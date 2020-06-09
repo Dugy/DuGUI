@@ -6,6 +6,8 @@
 #include <functional>
 #include <memory>
 
+#include <iostream>
+
 namespace DuGUI {
 
 enum class WidgetType {
@@ -26,21 +28,22 @@ struct DuGuiError : std::logic_error {
 };
 
 struct Widget;
+struct PropertyGroup;
 
 struct Backend {
 	struct StartupProperties {
-		WidgetType widgetType;
+		WidgetType widgetType = WidgetType::Unset;
 		std::string title;
 		std::function<void(const std::string&)> stringReaction;
 		std::function<void(long long int)> intReaction;
 		std::function<void(double)> doubleReaction;
 		std::function<void()> reaction;
 		std::string stringValue;
-		long long int intValue;
-		double doubleValue;
-		bool border;
-		bool windowed;
-		std::string defaultText;
+		long long int intValue = 0;
+		double doubleValue = 0;
+		bool border = false;
+		bool windowed = false;
+		std::string placeholderText;
 		std::vector<std::shared_ptr<Widget>> childrenShared;
 		std::vector<Widget*> childrenStatic;
 		template <typename T>
@@ -52,7 +55,7 @@ struct Backend {
 		}
 	};
 
-	virtual void create(const std::shared_ptr<StartupProperties>& properties) = 0;
+	virtual void create(StartupProperties* properties) = 0;
 	virtual void setTitle(const std::string& title) = 0;
 	virtual void addValueChangedReacion(const std::function<void(const std::string&)>& reaction) = 0;
 	virtual void addValueChangedReacion(const std::function<void(long long int)>& reaction) = 0;
@@ -61,6 +64,7 @@ struct Backend {
 	virtual void setValue(const std::string& value) = 0;
 	virtual void setValue(long long int value) = 0;
 	virtual void setValue(double value) = 0;
+	virtual void close() = 0;
 	virtual std::shared_ptr<Backend> createAnotherElement() = 0;
 };
 
@@ -79,15 +83,27 @@ struct PropertyGroup {
 			location = assigned;
 	}
 
-	std::shared_ptr<Backend::StartupProperties> properties;
+	std::shared_ptr<Backend::StartupProperties> properties = std::make_shared<Backend::StartupProperties>();
 	Widget* parent;
 
 	PropertyGroup title(const std::string& text) {
 		properties->title = text;
 		return *this;
 	}
-	PropertyGroup defaultText(const std::string& defaultTextSet) {
-		properties->defaultText = defaultTextSet;
+	PropertyGroup placeholderText(const std::string& placeholderTextSet) {
+		properties->placeholderText = placeholderTextSet;
+		return *this;
+	}
+	PropertyGroup defaultValue(const std::string& value) {
+		properties->stringValue = value;
+		return *this;
+	}
+	PropertyGroup defaultValue(long long int value) {
+		properties->intValue = value;
+		return *this;
+	}
+	PropertyGroup defaultValue(double value) {
+		properties->doubleValue = value;
 		return *this;
 	}
 	PropertyGroup noBorder() {
@@ -120,9 +136,6 @@ struct PropertyGroup {
 		reactionToChangeGeneric(properties->doubleReaction, assigned);
 		return *this;
 	}
-
-	operator HBox();
-	operator VBox();
 };
 
 // Widgets
@@ -138,10 +151,6 @@ struct Widget {
 		return _properties.properties.get();
 	}
 
-	static void _setup(Widget* self) {
-		self->_properties.parent->properties()->childrenStatic.push_back(self);
-	}
-
 	// pseudo widget
 	struct Title {
 		Title(const PropertyGroup& properties) {
@@ -150,13 +159,34 @@ struct Widget {
 	};
 
 	void run(Backend& parentBackend) {
-		_backend = parentBackend.createAnotherElement();
-		_backend->create(_properties.properties);
+		properties()->windowed = true;
+		propagateBackends(parentBackend);
+		_backend->create(properties());
 		_properties.properties.reset();
+	}
+
+	void propagateBackends(Backend& parentBackend) {
+		if (!_backend)
+			_backend = parentBackend.createAnotherElement();
+		_properties.properties->foreachChildren([this] (Widget* it) {
+			it->propagateBackends(*_backend);
+		});
+	}
+
+	void close() {
+		if (!_backend)
+			throw DuGuiError("Closing a window before it's open");
+		_backend->close();
+	}
+
+	Widget(const PropertyGroup& props) : _properties(props) {
+		_properties.parent->properties()->childrenStatic.push_back(this);
+	}
+	Widget() : _properties({ std::make_shared<Backend::StartupProperties>(), this }) {
 	}
 };
 
-class Container : public Widget {
+struct Container : public Widget {
 	bool _border = false;
 	void setBorder(bool border) {
 		_border = border;
@@ -170,8 +200,8 @@ protected:
 	PropertyGroup title(const std::string& titleSet) {
 		return makeChildProperties().title(titleSet);
 	}
-	PropertyGroup defaultText(const std::string& defaultTextSet) {
-		return makeChildProperties().defaultText(defaultTextSet);
+	PropertyGroup placeholderText(const std::string& placeholderTextSet) {
+		return makeChildProperties().placeholderText(placeholderTextSet);
 	}
 	PropertyGroup noBorder() {
 		return makeChildProperties().noBorder();
@@ -185,7 +215,12 @@ protected:
 	}
 
 public:
-	using Widget::Widget;
+	Container(const PropertyGroup& props, WidgetType type) : Widget(props) {
+		properties()->widgetType = type;
+	}
+	Container(WidgetType type) {
+		properties()->widgetType = type;
+	}
 
 	// pseudo widget
 	struct Border {
@@ -196,50 +231,44 @@ public:
 };
 
 struct HBox : public Container {
-	static void setup(HBox* self) {
-		self->_properties.properties->widgetType = WidgetType::HBox;
+	HBox(const PropertyGroup& props) : Container(props, WidgetType::HBox) {
+	}
+	HBox() : Container(WidgetType::HBox) {
 	}
 };
-
-inline PropertyGroup::operator HBox() {
-	HBox made;
-	made._properties = *this;
-	Widget::_setup(&made);
-	HBox::setup(&made);
-	return made;
-}
 
 struct VBox : public Container {
-	static void setup(VBox* self) {
-		self->_properties.properties->widgetType = WidgetType::VBox;
+	VBox(const PropertyGroup& props) : Container(props, WidgetType::VBox) {
+	}
+	VBox() : Container(WidgetType::VBox) {
 	}
 };
 
-inline PropertyGroup::operator VBox() {
-	VBox made;
-	made._properties = *this;
-	Widget::_setup(&made);
-	VBox::setup(&made);
-	return made;
-}
+struct Formulaire : public Container {
+	Formulaire(const PropertyGroup& props) : Container(props, WidgetType::Formulaire) {
+	}
+	Formulaire() : Container(WidgetType::Formulaire) {
+	}
+};
 
 template <typename T>
 class InputBase : public Widget {
 protected:
 	T _contents;
-	InputBase(const PropertyGroup& properties) {
-		_properties = properties;
-		Widget::_setup(this);
-	}
 
 public:
+	InputBase(const PropertyGroup& props) : Widget(props) {
+	}
 
 	void set(const T& newValue) {
 		_backend->setValue(newValue);
 	}
 
-	operator T() {
+	const T& operator*() const {
 		return _contents;
+	}
+	const T* operator->() const {
+		return *_contents;
 	}
 	T& operator=(const T& assigned) {
 		_contents = assigned;
@@ -260,10 +289,10 @@ template <>
 class InputDerived<std::string, void> : public InputBase<std::string> {
 public:
 	InputDerived(const PropertyGroup& properties) : InputBase(properties) {
-		properties.properties->widgetType = WidgetType::LineEdit;
-		_backend->addValueChangedReacion([this] (const std::string& newText) {
+		Widget::properties()->widgetType = WidgetType::LineEdit;
+		properties.properties->stringReaction = [this] (const std::string& newText) {
 			_contents = newText;
-		});
+		};
 	}
 	std::string& operator=(const std::string& assigned) {
 		if (properties())
@@ -271,42 +300,56 @@ public:
 		return InputBase<std::string>::operator=(assigned);
 	}
 
-	using InputBase::InputBase;
+	InputDerived() {
+		Widget::properties()->widgetType = WidgetType::LineEdit;
+		properties()->stringReaction = [this] (const std::string& newText) {
+			_contents = newText;
+		};
+	}
 };
 
 template <typename T>
 class InputDerived<T, typename std::enable_if<std::is_integral<T>::value>::type> : public InputBase<T> {
 public:
-	InputDerived(const PropertyGroup& properties) : InputBase<T>(properties) {
-		InputBase<T>::properties()->widgetType = WidgetType::NumberEdit;
+	InputDerived(const PropertyGroup& props) : InputBase<T>(props) {
+		Widget::properties()->widgetType = WidgetType::NumberEdit;
 		InputBase<T>::properties()->intReaction = [this] (long long int newNumber) {
 			InputBase<T>::_contents = newNumber;
 		};
+		InputBase<T>::_contents = 0;
 	}
 	T& operator=(T assigned) {
 		if (InputBase<T>::properties())
 			InputBase<T>::properties()->stringValue = assigned;
 		return InputBase<std::string>::operator=(assigned);
 	}
-
-	using InputBase<T>::InputBase;
-};
-
-class Button : public Widget {
-public:
-	Button(const PropertyGroup& propertiesSet) {
-		_properties = propertiesSet;
-		properties()->widgetType = WidgetType::Button;
-		Widget::_setup(this);
-	}
-
-	void operator=(const std::function<void()> reaction) {
-		_backend->addReaction(reaction);
+	InputDerived() {
+		Widget::properties()->widgetType = WidgetType::NumberEdit;
+		InputBase<T>::properties()->intReaction = [this] (long long int newNumber) {
+			InputBase<T>::_contents = newNumber;
+		};
 	}
 };
 
 template <typename T>
 using Input = InputDerived<T, void>;
+
+class Button : public Widget {
+public:
+	Button(const PropertyGroup& propertiesSet) : Widget(propertiesSet) {
+		properties()->widgetType = WidgetType::Button;
+	}
+
+	void operator=(const std::function<void()> reaction) {
+		if (_backend)
+			_backend->addReaction(reaction);
+		else
+			_properties.reaction(reaction);
+	}
+	Button() {
+		properties()->widgetType = WidgetType::Button;
+	}
+};
 
 } // namespace DuGUI
 #endif // DUGUI

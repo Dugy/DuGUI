@@ -1,5 +1,5 @@
 #include "dugui_qt.hpp"
-#include <QMainWindow>
+#include <QDialog>
 #include <QPushButton>
 #include <QCheckBox>
 #include <QLineEdit>
@@ -9,18 +9,23 @@
 #include <QVBoxLayout>
 #include <QLabel>
 
+#include <iostream>
+
 using namespace DuGUI;
 
-class DuGUI::BackendQtWindow : public QMainWindow {
+class DuGUI::BackendQtWindow : public QDialog {
 
 };
 
-void BackendQt::create(const std::shared_ptr<StartupProperties>& properties) {
+void BackendQt::create(StartupProperties* properties) {
 	_type = properties->widgetType;
+	_windowed = properties->windowed;
 
 	auto makeContainer = [&] () -> QWidget* {
-		if (properties->windowed) {
+		if (_windowed) {
 			_container.window = new BackendQtWindow;
+			_container.window->setWindowTitle(QString::fromStdString(properties->title.empty() ?
+					"User Interface" : properties->title));
 			return _container.window;
 		} else {
 			_container.nonWindow = new QWidget;
@@ -39,6 +44,7 @@ void BackendQt::create(const std::shared_ptr<StartupProperties>& properties) {
 
 	switch (_type) {
 	case WidgetType::Unset:
+		throw DuGuiError("Type of widget was not set");
 	case WidgetType::Formulaire: {
 		QWidget* making = makeContainer();
 		QGridLayout* layout = new QGridLayout(making);
@@ -51,7 +57,7 @@ void BackendQt::create(const std::shared_ptr<StartupProperties>& properties) {
 			layout->addWidget(label, line, 0);
 			auto childBackend = std::dynamic_pointer_cast<BackendQt>(it->_backend);
 			childBackend->_auxiliary.description = label;
-			it->_backend->create(it->_properties.properties);
+			it->_backend->create(it->_properties.properties.get());
 			_auxiliary.children->push_back(childBackend);
 			if (childBackend->_container.dummy)
 				layout->addWidget(childBackend->_container.nonWindow, line, 1);
@@ -73,7 +79,7 @@ void BackendQt::create(const std::shared_ptr<StartupProperties>& properties) {
 		_auxiliary.children = new std::vector<std::shared_ptr<BackendQt>>();
 		properties->foreachChildren([&] (Widget* it) {
 			auto childBackend = std::dynamic_pointer_cast<BackendQt>(it->_backend);
-			childBackend->create(it->_properties.properties);
+			childBackend->create(it->_properties.properties.get());
 			_auxiliary.children->push_back(childBackend);
 			if (childBackend->_container.dummy)
 				layout->addWidget(childBackend->_container.nonWindow);
@@ -85,26 +91,42 @@ void BackendQt::create(const std::shared_ptr<StartupProperties>& properties) {
 		_widget.lineEdit = new QLineEdit();
 		wrapIfNeeded(_widget.lineEdit);
 		setValue(properties->stringValue);
+		_widget.lineEdit->setPlaceholderText(QString::fromStdString(properties->placeholderText));
 		break;
 	case WidgetType::NumberEdit:
 		_widget.lineEdit = new QLineEdit();
 		_widget.lineEdit->setValidator(new QIntValidator(_widget.lineEdit));
 		wrapIfNeeded(_widget.lineEdit);
-		setValue(properties->intValue);
+		if (!properties->intValue && properties->placeholderText.empty())
+			setValue(properties->intValue);
+		if (properties->intReaction)
+			addValueChangedReacion(properties->intReaction);
+		_widget.lineEdit->setPlaceholderText(QString::fromStdString(properties->placeholderText));
 		break;
 	case WidgetType::FloatEdit:
 		_widget.lineEdit = new QLineEdit();
 		_widget.lineEdit->setValidator(new QDoubleValidator(_widget.lineEdit));
 		wrapIfNeeded(_widget.lineEdit);
-		setValue(properties->doubleValue);
+		if (!properties->doubleValue && properties->placeholderText.empty())
+			setValue(properties->doubleValue);
+		if (properties->doubleReaction)
+			addValueChangedReacion(properties->doubleReaction);
+		_widget.lineEdit->setPlaceholderText(QString::fromStdString(properties->placeholderText));
 		break;
 	case WidgetType::CheckBox:
 		_widget.checkBox = new QCheckBox();
 		wrapIfNeeded(_widget.checkBox);
+		if (properties->reaction)
+			addReaction(properties->reaction);
 		break;
 	case WidgetType::SpinBox:
 		_widget.spinBox = new QSpinBox();
 		wrapIfNeeded(_widget.spinBox);
+		break;
+	case WidgetType::Button:
+		_widget.button = new QPushButton(QString::fromStdString(properties->title));
+		if (properties->reaction)
+			addReaction(properties->reaction);
 		break;
 	default:
 		throw DuGuiError("Widget type not supported by Qt backend");
@@ -114,13 +136,9 @@ void BackendQt::create(const std::shared_ptr<StartupProperties>& properties) {
 		setTitle(properties->title);
 	if (properties->stringReaction)
 		addValueChangedReacion(properties->stringReaction);
-	if (properties->intReaction)
-		addValueChangedReacion(properties->intReaction);
-	if (properties->doubleReaction)
-		addValueChangedReacion(properties->doubleReaction);
 
 	if (properties->windowed)
-		_container.window->show();
+		_container.window->exec();
 };
 
 void BackendQt::setTitle(const std::string& title) {
@@ -131,6 +149,13 @@ void BackendQt::setTitle(const std::string& title) {
 	case WidgetType::CheckBox:
 	case WidgetType::SpinBox:
 		_auxiliary.description->setText(QString::fromStdString(title));
+		break;
+	case WidgetType::Button:
+		_widget.button->setText(QString::fromStdString(title));
+		break;
+	case WidgetType::HBox:
+	case WidgetType::VBox:
+	case WidgetType::Formulaire:
 		break;
 	default:
 		throw DuGuiError("Widget type not supported by Qt backend");
@@ -226,10 +251,16 @@ void BackendQt::setValue(double value) {
 		break;
 	default:
 		throw DuGuiError("Can't set a floating point value to a widget of type " + std::to_string(int(_type)));
-		throw DuGuiError("Can't set a floating point value to a widget of type " + std::to_string(int(_type)));
 	}
 };
 
+void BackendQt::close() {
+	if (!_windowed)
+		throw DuGuiError("Trying to close a widget that isn't a window");
+	_container.window->done(true);
+}
+
 std::shared_ptr<Backend> BackendQt::createAnotherElement() {
-	return std::make_shared<BackendQt>();
+	auto made = std::make_shared<BackendQt>();
+	return made;
 };

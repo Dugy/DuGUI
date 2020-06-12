@@ -53,11 +53,11 @@ void BackendQt::create(StartupProperties* properties) {
 		_auxiliary.children = new std::vector<std::shared_ptr<BackendQt>>();
 		int line = 0;
 		properties->foreachChildren([&] (Widget* it) {
-			QLabel* label = new QLabel(QString::fromStdString(it->_properties.properties->title), making);
+			QLabel* label = new QLabel(QString::fromStdString(it->properties()->title), making);
 			layout->addWidget(label, line, 0);
-			auto childBackend = std::dynamic_pointer_cast<BackendQt>(it->_backend);
+			auto childBackend = std::dynamic_pointer_cast<BackendQt>(it->backend());
 			childBackend->_auxiliary.description = label;
-			it->_backend->create(it->_properties.properties.get());
+			it->backend()->create(it->properties());
 			_auxiliary.children->push_back(childBackend);
 			if (childBackend->_container.dummy)
 				layout->addWidget(childBackend->_container.nonWindow, line, 1);
@@ -78,8 +78,8 @@ void BackendQt::create(StartupProperties* properties) {
 
 		_auxiliary.children = new std::vector<std::shared_ptr<BackendQt>>();
 		properties->foreachChildren([&] (Widget* it) {
-			auto childBackend = std::dynamic_pointer_cast<BackendQt>(it->_backend);
-			childBackend->create(it->_properties.properties.get());
+			auto childBackend = std::dynamic_pointer_cast<BackendQt>(it->backend());
+			childBackend->create(it->properties());
 			_auxiliary.children->push_back(childBackend);
 			if (childBackend->_container.dummy)
 				layout->addWidget(childBackend->_container.nonWindow);

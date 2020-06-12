@@ -27,7 +27,7 @@ struct DuGuiError : std::logic_error {
 	using std::logic_error::logic_error;
 };
 
-struct Widget;
+class Widget;
 struct PropertyGroup;
 
 struct Backend {
@@ -69,22 +69,24 @@ struct Backend {
 };
 
 // Setting properties
-struct VBox;
-struct HBox;
+
 struct PropertyGroup {
-	template <typename Value>
-	void reactionToChangeGeneric(std::function<void(Value)>& location, const std::function<void(Value)>& assigned) {
+	template <typename ValueSet, typename ValueWanted>
+	void reactionToChangeGeneric(std::function<void(ValueSet)>& location, const std::function<void(ValueWanted)>& assigned) {
 		if (location)
-			location = [original = location, assigned] (Value value) {
+			location = [original = location, assigned] (ValueSet value) {
 				original(value);
 				assigned(value);
 			};
-		else
+		else if constexpr(std::is_same_v<ValueSet, ValueWanted>)
 			location = assigned;
+		else location = [original = location] (ValueSet value) {
+			original(value);
+		};
 	}
 
 	std::shared_ptr<Backend::StartupProperties> properties = std::make_shared<Backend::StartupProperties>();
-	Widget* parent;
+	Widget* parent = nullptr;
 
 	PropertyGroup title(const std::string& text) {
 		properties->title = text;
@@ -128,27 +130,41 @@ struct PropertyGroup {
 		reactionToChangeGeneric(properties->stringReaction, assigned);
 		return *this;
 	}
-	PropertyGroup reactionToChange(const std::function<void(long long int)>& assigned) {
+	template <typename T, std::enable_if<std::is_integral_v<T>>* = nullptr>
+	PropertyGroup reactionToChange(const std::function<void(T)>& assigned) {
 		reactionToChangeGeneric(properties->intReaction, assigned);
 		return *this;
 	}
-	PropertyGroup reactionToChange(const std::function<void(double)>& assigned) {
+	template <typename T, std::enable_if<std::is_floating_point_v<T>>* = nullptr>
+	PropertyGroup reactionToChange(const std::function<void(T)>& assigned) {
 		reactionToChangeGeneric(properties->doubleReaction, assigned);
 		return *this;
 	}
+
+	template <typename Class, typename Value>
+	PropertyGroup reactionToChange(void(Class::*method)(Value));
+	template <typename Class>
+	PropertyGroup reaction(void(Class::*method)());
 };
 
 // Widgets
-struct Widget {
+class Widget {
+protected:
 	PropertyGroup _properties;
 
 	void setTitle(const std::string& title) {
 		properties()->title = title;
 	}
-
 	std::shared_ptr<Backend> _backend;
+public:
 	Backend::StartupProperties* properties() {
 		return _properties.properties.get();
+	}
+	std::shared_ptr<Backend> backend() const {
+		return _backend;
+	}
+	Widget* parent() {
+		return _properties.parent;
 	}
 
 	// pseudo widget
@@ -182,11 +198,30 @@ struct Widget {
 	Widget(const PropertyGroup& props) : _properties(props) {
 		_properties.parent->properties()->childrenStatic.push_back(this);
 	}
-	Widget() : _properties({ std::make_shared<Backend::StartupProperties>(), this }) {
+	Widget() : _properties({ std::make_shared<Backend::StartupProperties>(), nullptr }) {
 	}
 };
 
-struct Container : public Widget {
+template <typename Class, typename Value>
+PropertyGroup PropertyGroup::reactionToChange(void(Class::*method)(Value)) {
+	Widget* it = parent;
+	for ( ; it->parent(); it = it->parent()) {}
+	reaction([method, parent = static_cast<Class*>(parent)](Value value) {
+		(parent->*method)(value);
+	});
+	return *this;
+}
+template <typename Class>
+PropertyGroup PropertyGroup::reaction(void(Class::*method)()) {
+	Widget* it = parent;
+	for ( ; it->parent(); it = it->parent()) {}
+	reaction([method, parent = static_cast<Class*>(it)]() {
+		(parent->*method)();
+	});
+	return *this;
+}
+
+class Container : public Widget {
 	bool _border = false;
 	void setBorder(bool border) {
 		_border = border;
@@ -212,6 +247,24 @@ protected:
 	template <typename T>
 	PropertyGroup reaction(const std::function<void(T)>& assigned) {
 		return makeChildProperties().reaction(assigned);
+	}
+	template <typename Class, typename Value>
+	PropertyGroup reactionToChange(void(Class::*method)(Value)) {
+		Widget* parent = this;
+		while (parent->parent())
+			parent = parent->parent();
+		return makeChildProperties().reaction([method, parent = static_cast<Class>(parent)](Value value) {
+			(parent->*method)(value);
+		});
+	}
+	template <typename Class>
+	PropertyGroup reaction(void(Class::*method)()) {
+		Widget* parent = this;
+		while (parent->parent())
+			parent = parent->parent();
+		return makeChildProperties().reaction([method, parent = static_cast<Class>(parent)]() {
+			(parent->*method)();
+		});
 	}
 
 public:
@@ -272,8 +325,14 @@ public:
 	}
 	T& operator=(const T& assigned) {
 		_contents = assigned;
-		if (_backend)
-			_backend->setValue(assigned);
+		if (_backend) {
+			if constexpr(std::is_integral_v<T>)
+				_backend->setValue((long long int)(assigned));
+			else if constexpr(std::is_floating_point_v<T>)
+				_backend->setValue(double(assigned));
+			else
+				_backend->setValue(assigned);
+		}
 		return _contents;
 	}
 
@@ -306,6 +365,13 @@ public:
 			_contents = newText;
 		};
 	}
+
+	void reaction(const std::function<void(const std::string&)> reactionSet) {
+		if (_backend)
+			_backend->addValueChangedReacion(reactionSet);
+		else
+			_properties.reactionToChange(reactionSet);
+	}
 };
 
 template <typename T>
@@ -320,14 +386,27 @@ public:
 	}
 	T& operator=(T assigned) {
 		if (InputBase<T>::properties())
-			InputBase<T>::properties()->stringValue = assigned;
-		return InputBase<std::string>::operator=(assigned);
+			InputBase<T>::properties()->intValue = assigned;
+		return InputBase<T>::operator=(assigned);
 	}
 	InputDerived() {
 		Widget::properties()->widgetType = WidgetType::NumberEdit;
 		InputBase<T>::properties()->intReaction = [this] (long long int newNumber) {
 			InputBase<T>::_contents = newNumber;
 		};
+	}
+
+	template <typename Changed, std::enable_if<std::is_integral_v<Changed>>* = nullptr>
+	void reaction(const std::function<void(Changed)> reactionSet) {
+		if (InputBase<T>::_backend) {
+			if constexpr(std::is_same_v<Changed, double>)
+				InputBase<T>::_backend->addReaction(reactionSet);
+			else
+				InputBase<T>::_backend->addReaction([set = reactionSet] (Changed changed) {
+					set(changed);
+				});
+		} else
+			InputBase<T>::_properties.reactionToChange(reactionSet);
 	}
 };
 
@@ -340,11 +419,11 @@ public:
 		properties()->widgetType = WidgetType::Button;
 	}
 
-	void operator=(const std::function<void()> reaction) {
+	void operator=(const std::function<void()> reactionSet) {
 		if (_backend)
-			_backend->addReaction(reaction);
+			_backend->addReaction(reactionSet);
 		else
-			_properties.reaction(reaction);
+			_properties.reaction(reactionSet);
 	}
 	Button() {
 		properties()->widgetType = WidgetType::Button;
